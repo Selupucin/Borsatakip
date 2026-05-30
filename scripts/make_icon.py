@@ -129,8 +129,8 @@ def main() -> None:
         sizes=sizes,
         append_images=icons[1:],
     )
-    print(f"İkon yazıldı: {OUT}")
-    print(f"PNG önizleme:  {OUT.with_suffix('.png')}")
+    print(f"Icon written: {OUT}")
+    print(f"PNG preview:  {OUT.with_suffix('.png')}")
 
 
 if __name__ == "__main__":
