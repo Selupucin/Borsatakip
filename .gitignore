@@ -98,3 +98,29 @@ $RECYCLE.BIN/
 # Poetry (lock dosyası COMMIT edilir; cache edilmez)
 # =============================================================================
 .poetry/
+
+# =============================================================================
+# Geliştirme dosyaları — kullanıcıya / build'e gerekli değil
+# =============================================================================
+# Claude Code agent definitions ve geçmiş kayıtları
+.claude/
+# Proje belgeleri (sadece geliştirme süreci için)
+doc/
+# Test dosyaları (CI build için gerekli değil)
+tests/
+# Release süreç dokümantasyonu (sadece maintainer için)
+RELEASING.md
+# Pre-commit hook'ları (dev tool)
+.pre-commit-config.yaml
+# Alembic (kullanılmıyor — lightweight migrations app/main.py'de)
+alembic.ini
+app/db/migrations/
+
+# =============================================================================
+# Kullanıcı verisi — ASLA commit'lenmemeli (portföy, pozisyonlar, vb.)
+# =============================================================================
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+borsa_bot.db
