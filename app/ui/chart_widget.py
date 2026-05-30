@@ -545,79 +545,133 @@ class ChartWidget(QWidget):
         self._fallback_link = info
 
     def _on_load_finished(self, ok: bool) -> None:
-        """QWebEngineView load tamamlandı —
-          - başarısızsa kullanıcıya toast bildir
-          - başarılıysa TradingView'in 'Sembol sadece TradingView'de' modalını
-            CSS injection ile gizle (BIST hisseleri için bu popup sık çıkıyor;
-            kullanıcı her sembol değişiminde 'Tamam' tıklamak zorunda kalıyordu)
+        """QWebEngineView load tamamlandı.
+
+        Stratejik karar:
+          - TradingView free tier BIST hisselerinin çoğunda chart data
+            göstermiyor. Önceki davranış: widget default'a (Apple) düşüyor,
+            kullanıcı yanlış sembol görüyor.
+          - YENİ: yüklendikten 3 sn sonra page title'ı kontrol et — eğer
+            beklediğimiz ticker yer almıyorsa otomatik Yahoo Finance fallback'e
+            geç (chart_widget içinde Yahoo iframe yükle ya da link sistem
+            tarayıcısında aç).
         """
         if not ok and self._current_ticker:
             symbol = _tv_symbol(self._current_ticker, self._current_exchange)
             logger.warning(
-                "TradingView grafik yüklenemedi: symbol={} — fallback'e geçiliyor.",
+                "TradingView grafik yüklenemedi: symbol={} — Yahoo Finance fallback.",
                 symbol,
             )
-            ToastManager.instance().show(
-                f"Grafik yüklenmedi ({symbol}). "
-                f"Üst toolbar'daki '📊 Yahoo Finance' butonu ile alternatif aç.",
-                level="warning",
-            )
+            self._switch_to_yahoo_finance(reason="load_failed")
             return
 
-        # Yüklendi — TV widget popup'larını gizlemek için CSS+JS inject et.
-        if self._web_view is None:
+        # Yüklendi — TV widget popup'larını gizle + sembol verify schedule et
+        if self._web_view is None or not self._current_ticker:
             return
+
+        # 3 sn sonra başlık doğrulaması (TV widget'ın asenkron yüklenmesi için)
+        from PySide6.QtCore import QTimer  # noqa: WPS433
+
+        QTimer.singleShot(3000, self._verify_loaded_symbol)
+
+    def _verify_loaded_symbol(self) -> None:
+        """JS ile document.title'ı al + beklediğimiz ticker mı kontrol et.
+
+        TradingView widget yüklendiğinde document.title genelde
+        "BIST:AKBNK Chart Image — TradingView" gibi olur. Eğer ticker
+        title'da yoksa → fallback Yahoo Finance.
+        """
+        if self._web_view is None or not self._current_ticker:
+            return
+        ticker = self._current_ticker.upper()
+
+        def _check(title) -> None:  # noqa: ANN001
+            try:
+                t = str(title or "").upper()
+                # Tickerın baş harfleri title'da geçmiyorsa fallback
+                if t and ticker not in t:
+                    logger.warning(
+                        "TV widget yanlış sembol yüklemiş: title={} ticker={} → Yahoo fallback",
+                        t, ticker,
+                    )
+                    self._switch_to_yahoo_finance(reason="wrong_symbol_loaded")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("symbol verify hata: {}", exc)
+
         try:
-            # MutationObserver ile DOM değişikliklerini izle ve modal'ları
-            # gizle. iframe içeriği same-origin policy nedeniyle erişilemez;
-            # bu yüzden CSS-only attack: parent document'a güçlü stil enjekte
-            # et — TradingView widget iframe'i içine yansımaz ama ana çerçeve
-            # üstü modal'lar gizlenir.
-            self._web_view.page().runJavaScript("""
-                (function() {
-                    var style = document.createElement('style');
-                    style.textContent = `
-                        /* TradingView dialog/modal popup'larını gizle */
-                        [role="dialog"],
-                        .tv-dialog,
-                        .tv-dialog__modal-wrap,
-                        .js-dialog,
-                        div[class*="dialog"],
-                        div[class*="DialogContent"] {
-                            display: none !important;
-                            visibility: hidden !important;
-                        }
-                        /* Backdrop overlay */
-                        .tv-dialog__modal-background,
-                        div[class*="backdrop"] {
-                            display: none !important;
-                        }
-                    `;
-                    document.head.appendChild(style);
-
-                    // MutationObserver: yeni eklenen dialog'ları anında gizle
-                    var observer = new MutationObserver(function(mutations) {
-                        document.querySelectorAll(
-                            '[role="dialog"], .tv-dialog, .js-dialog'
-                        ).forEach(function(el) {
-                            el.style.display = 'none';
-                            el.style.visibility = 'hidden';
-                            // Backdrop'u kapatmaya çalış (X tıklatmaya gerek
-                            // kalmadan da bazen DOM'da kalır)
-                            var closeBtn = el.querySelector(
-                                '[class*="close"], button[aria-label*="lose"]'
-                            );
-                            if (closeBtn) closeBtn.click();
-                        });
-                    });
-                    observer.observe(document.body, {
-                        childList: true,
-                        subtree: true
-                    });
-                })();
-            """)
+            self._web_view.page().runJavaScript(
+                "document.title", _check
+            )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("TV popup gizleme JS hatası: {}", exc)
+            logger.debug("runJavaScript hata: {}", exc)
+
+    def _switch_to_yahoo_finance(self, reason: str = "") -> None:
+        """TV widget yerine Yahoo Finance chart sayfasını iframe'de yükle.
+
+        Yahoo Finance iframe-safe değil (X-Frame-Options DENY) — bu yüzden
+        chart_widget içinde GÖSTEREMEZ. Çözüm: kullanıcıya net mesaj +
+        sistem tarayıcısında Yahoo Finance landing aç (one-click).
+        """
+        if not self._current_ticker:
+            return
+
+        ToastManager.instance().show(
+            f"{self._current_ticker} TradingView'de gösterilemiyor. "
+            f"Yahoo Finance tarayıcıda açılıyor.",
+            level="info", duration_ms=5000,
+        )
+
+        # Chart widget'ı placeholder'a çevir + link göster
+        symbol_yf = self._current_ticker.upper()
+        ex = (self._current_exchange or "").upper()
+        if ex == "BIST" and not symbol_yf.endswith(".IS"):
+            symbol_yf = f"{symbol_yf}.IS"
+        yahoo_url = f"https://finance.yahoo.com/quote/{quote(symbol_yf)}"
+
+        if self._web_view is not None:
+            try:
+                # WebEngine'de fallback bilgilendirme sayfası
+                bg = "#1E1E1E" if self._is_dark else "#FAFAFA"
+                fg = "#E0E0E0" if self._is_dark else "#333333"
+                accent = "#1976D2"
+                html = (
+                    f"<!doctype html><html><head><meta charset='utf-8'>"
+                    f"<style>"
+                    f"html,body{{margin:0;padding:0;background:{bg};color:{fg};"
+                    f"font-family:Segoe UI,Arial,sans-serif;}}"
+                    f".wrap{{height:100vh;display:flex;flex-direction:column;"
+                    f"align-items:center;justify-content:center;text-align:center;"
+                    f"padding:24px;gap:16px;}}"
+                    f".title{{font-size:20pt;font-weight:700;}}"
+                    f".desc{{color:gray;max-width:520px;line-height:1.5;}}"
+                    f".btn{{background:{accent};color:white;padding:14px 28px;"
+                    f"border-radius:8px;font-weight:700;font-size:14pt;"
+                    f"text-decoration:none;}}"
+                    f".btn:hover{{background:#0D47A1;}}"
+                    f".small{{color:gray;font-size:9pt;}}"
+                    f"</style></head><body>"
+                    f"<div class='wrap'>"
+                    f"<div class='title'>📊 {self._current_ticker} — Yahoo Finance</div>"
+                    f"<div class='desc'>TradingView bu hisseyi gösteremedi "
+                    f"(free tier'da BIST hisseleri kısıtlı). Yahoo Finance "
+                    f"alternatif olarak otomatik açıldı.</div>"
+                    f"<a class='btn' href='{yahoo_url}' target='_blank'>"
+                    f"Yahoo Finance'da Aç →</a>"
+                    f"<div class='small'>{yahoo_url}</div>"
+                    f"</div></body></html>"
+                )
+                self._web_view.setHtml(html)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Yahoo fallback HTML hatası: {}", exc)
+
+        # Tarayıcıda otomatik aç (kullanıcı tıklamadan)
+        try:
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(yahoo_url))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Yahoo otomatik açma hatası: {}", exc)
+
+        logger.info("Yahoo Finance fallback: {} (reason={})", yahoo_url, reason)
 
     # Geriye uyumluluk — eski API metodları (no-op).
     def add_indicator(self, name: str, series) -> None:  # noqa: ANN001

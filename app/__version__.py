@@ -8,6 +8,6 @@
 4. GitHub Actions workflow installer'ı otomatik üretir + Release'e yükler.
 """
 
-__version__ = "0.1.13"
+__version__ = "0.1.14"
 __author__ = "Selupucin"
 __repo__ = "Selupucin/Borsatakip"
