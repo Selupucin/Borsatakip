@@ -368,6 +368,38 @@ class SettingsWidget(QWidget):
         upd_btn_row.addStretch(1)
         update_layout.addRow(upd_btn_row)
 
+        # İndirme progress bar — sadece indirme sırasında görünür.
+        from PySide6.QtWidgets import QProgressBar  # noqa: WPS433
+
+        self._update_progress = QProgressBar()
+        self._update_progress.setRange(0, 100)
+        self._update_progress.setValue(0)
+        self._update_progress.setFormat("%p%  (%v / %m MB)")
+        self._update_progress.setVisible(False)
+        self._update_progress.setStyleSheet(
+            "QProgressBar { border: 1px solid #555; border-radius: 4px; "
+            "text-align: center; height: 24px; }"
+            "QProgressBar::chunk { background-color: #2E7D32; }"
+        )
+        update_layout.addRow("İlerleme:", self._update_progress)
+
+        # Status mesajı (indirme + kurulum aşaması)
+        self._update_status_lbl = QLabel("")
+        self._update_status_lbl.setStyleSheet("color: gray; font-style: italic;")
+        self._update_status_lbl.setVisible(False)
+        update_layout.addRow("", self._update_status_lbl)
+
+        # "Yeniden Başlat" butonu — indirme bitince görünür.
+        self._update_restart_btn = QPushButton("🔁 Yeni Sürüme Geçmek İçin Yeniden Başlat")
+        self._update_restart_btn.setVisible(False)
+        self._update_restart_btn.setStyleSheet(
+            "QPushButton { background-color: #1565C0; color: white; "
+            "font-weight: 700; padding: 8px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #0D47A1; }"
+        )
+        self._update_restart_btn.clicked.connect(self._on_restart_for_update_clicked)
+        update_layout.addRow(self._update_restart_btn)
+
         # Otomatik kontrol checkbox
         self._update_auto_check = QCheckBox("Otomatik güncelleme kontrolü (her 6 saatte bir)")
         self._update_auto_check.setChecked(True)
@@ -566,16 +598,19 @@ class SettingsWidget(QWidget):
 
     @Slot()
     def _on_download_update_clicked(self) -> None:
-        """İndir & Kur akışı."""
+        """İndir akışı — kurulum kullanıcı 'Yeniden Başlat' tıklayınca yapılır."""
         info = self._update_info
         if info is None or not info.is_newer or not info.download_url:
             return
 
+        total_mb = int((info.asset_size_bytes or 0) / 1024 / 1024)
         confirm = QMessageBox.question(
             self,
             "Güncelleme",
-            f"Sürüm {info.latest_version} indirilecek (~{int((info.asset_size_bytes or 0)/1024/1024)} MB).\n"
-            f"İndirme tamamlanınca uygulama kapanıp installer açılacak.\n\nDevam edilsin mi?",
+            f"Sürüm {info.latest_version} indirilecek (~{total_mb} MB).\n\n"
+            f"İndirme uygulama AÇIKKEN tamamlanır. Kurulum için 'Yeniden\n"
+            f"Başlat' butonuna tıklayacaksın — uygulama kapanıp yeni sürüm\n"
+            f"otomatik açılır (yaklaşık 30 saniye).\n\nDevam edilsin mi?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -585,17 +620,36 @@ class SettingsWidget(QWidget):
         from app.services.updater import UpdateChecker
 
         self._update_download_btn.setEnabled(False)
-        self._update_download_btn.setText("İndiriliyor… %0")
+        self._update_download_btn.setText("İndiriliyor…")
+
+        # Progress UI'ı görünür yap
+        self._update_progress.setMaximum(max(1, total_mb))
+        self._update_progress.setValue(0)
+        self._update_progress.setVisible(True)
+        self._update_status_lbl.setText(
+            f"v{info.latest_version} indiriliyor — bu süre içinde uygulamayı kullanmaya devam edebilirsin."
+        )
+        self._update_status_lbl.setVisible(True)
+
         ToastManager.instance().show(
-            f"{info.latest_version} indiriliyor — birkaç dakika sürebilir.",
-            level="info", duration_ms=6000,
+            f"{info.latest_version} indirilmeye başlandı (~{total_mb} MB).",
+            level="info", duration_ms=4000,
         )
 
+        # Worker thread'den UI'ya güvenli sinyal göndermek için Qt signal.
+        from PySide6.QtCore import QMetaObject, Qt, Q_ARG  # noqa: WPS433
+
         def _progress(downloaded: int, total: int) -> None:
-            if total > 0:
-                pct = int(downloaded * 100 / total)
-                # Qt thread'i değil; sadece son değeri sakla
-                self._download_progress_pct = pct
+            if total <= 0:
+                return
+            mb_done = downloaded / 1024 / 1024
+            # Worker thread → main thread güvenli güncelleme
+            QMetaObject.invokeMethod(
+                self._update_progress,
+                "setValue",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(int, int(mb_done)),
+            )
 
         async def _do():
             return await UpdateChecker().download(info, progress=_progress)
@@ -608,35 +662,67 @@ class SettingsWidget(QWidget):
             )
 
     def _on_download_complete(self, installer_path) -> None:
+        """İndirme bitti — kullanıcı 'Yeniden Başlat' tıklayana kadar bekle."""
+        self._downloaded_installer = installer_path
+        self._update_progress.setValue(self._update_progress.maximum())
+        self._update_status_lbl.setText(
+            "İndirme tamamlandı. Kurulum için aşağıdaki 'Yeniden Başlat' butonuna tıkla."
+        )
+        self._update_status_lbl.setStyleSheet(
+            "color: #2E7D32; font-weight: 600;"
+        )
+        self._update_download_btn.setText("✓ İndirildi")
+        # Yeniden Başlat butonunu göster
+        self._update_restart_btn.setVisible(True)
+
+        ToastManager.instance().show(
+            "İndirme tamam. Kurulum için Ayarlar → 'Yeniden Başlat' butonuna tıkla.",
+            level="success", duration_ms=8000,
+        )
+
+    @Slot()
+    def _on_restart_for_update_clicked(self) -> None:
+        """Yeniden başlat → installer'ı helper script üzerinden çalıştır.
+
+        Helper script bağımsız bir process (PowerShell) olarak çalışır:
+        1. Bu uygulama (PID) kapanmasını bekler
+        2. /VERYSILENT installer'ı çalıştırır (UAC popup user onayı ister)
+        3. Kurulum bitince yeni BorsaBot.exe'yi başlatır
+
+        Böylece kurulum SIRASINDA UI kapalı, ama kullanıcı için
+        görünüşte "kapandı → yeni sürüm açıldı" zinciri akıcıdır.
+        """
+        if not self._downloaded_installer:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Yeniden Başlat",
+            "Uygulama şimdi kapanacak ve güncelleme kurulacak.\n\n"
+            "• UAC penceresi çıkarsa 'Evet' tıkla\n"
+            "• Kurulum ~30 saniye sürer\n"
+            "• Yeni sürüm otomatik açılacak\n\nDevam edilsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
         from app.services.updater import UpdateChecker
 
-        self._downloaded_installer = installer_path
-        self._update_download_btn.setText("✓ İndirildi — Arka planda kuruluyor")
-        ToastManager.instance().show(
-            "İndirme tamam — güncelleme arka planda kuruluyor. "
-            "Uygulama otomatik kapanıp yeniden başlayacak.",
-            level="success", duration_ms=5000,
-        )
-        # Kısa bir gecikme ile installer başlat (toast görünsün)
-        from PySide6.QtCore import QTimer
-
-        def _launch():
-            try:
-                # silent=True → /VERYSILENT: kullanıcı UI görmez,
-                # /RESTARTAPPLICATIONS sayesinde kurulum sonrası exe geri açılır.
-                UpdateChecker.install(installer_path, silent=True)
-            except Exception as exc:  # noqa: BLE001
-                ToastManager.instance().show(
-                    f"Installer başlatılamadı: {exc}", level="error"
-                )
-                self._update_download_btn.setEnabled(True)
-                self._update_download_btn.setText("⬇ İndir & Kur")
-
-        QTimer.singleShot(1500, _launch)
+        try:
+            UpdateChecker.install_via_helper(self._downloaded_installer)
+        except Exception as exc:  # noqa: BLE001
+            ToastManager.instance().show(
+                f"Kurulum başlatılamadı: {exc}", level="error", duration_ms=8000
+            )
+            logger.exception("install_via_helper hata: {}", exc)
 
     def _on_download_error(self, exc) -> None:
         self._update_download_btn.setEnabled(True)
         self._update_download_btn.setText("⬇ İndir & Kur")
+        self._update_progress.setVisible(False)
+        self._update_status_lbl.setVisible(False)
         ToastManager.instance().show(f"İndirme hatası: {exc}", level="error", duration_ms=6000)
         logger.warning("Update download hata: {}", exc)
 

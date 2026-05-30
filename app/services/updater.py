@@ -265,6 +265,126 @@ class UpdateChecker:
     # ------------------------------------------------------------------ install
 
     @staticmethod
+    def install_via_helper(installer_path: Path) -> None:
+        """Helper PowerShell script ile bağımsız kurulum + restart akışı.
+
+        Akış:
+          1. Bu fonksiyon PowerShell helper'ı başlatır (bağımsız process).
+          2. Helper bizim PID'imizi bekler — uygulama kapanır.
+          3. Helper installer'ı /VERYSILENT çalıştırır (UAC popup).
+          4. Kurulum bitince yeni BorsaBot.exe'yi başlatır.
+          5. Bu fonksiyon QApplication.quit() ile uygulamayı kapatır.
+
+        Inno Setup'ın kendi /RESTARTAPPLICATIONS flag'ine bel bağlamak
+        yerine bu pattern daha güvenilir — helper Python tarafından
+        kontrol edilir, başarısız olursa user'a görünür hata bırakır.
+        """
+        import os
+        import tempfile
+
+        if not installer_path.exists():
+            raise FileNotFoundError(f"Installer yok: {installer_path}")
+
+        # Kurulu BorsaBot.exe'nin yolu — PyInstaller bundle ise sys.executable
+        if getattr(sys, "frozen", False):
+            app_exe = Path(sys.executable)
+        else:
+            # Dev modda Python script çalıştırılıyor — sys.executable Python
+            # yorumlayıcısı. Bu durumda helper'ı dummy çalıştır (no-op restart).
+            app_exe = Path(sys.executable)
+
+        # Helper script — runtime'da %TEMP%'e yazılır
+        helper_script = r'''
+param(
+    [Parameter(Mandatory=$true)][int]$ParentPid,
+    [Parameter(Mandatory=$true)][string]$InstallerPath,
+    [Parameter(Mandatory=$true)][string]$AppExe
+)
+
+$log = "$env:TEMP\borsabot_update_helper.log"
+"[{0}] Helper başladı. ParentPid={1}" -f (Get-Date -Format "HH:mm:ss"), $ParentPid | Out-File $log -Append
+
+# 1) Parent process (BorsaBot) kapanmasını bekle
+try {
+    Wait-Process -Id $ParentPid -Timeout 30 -ErrorAction Stop
+    "[{0}] BorsaBot kapandı." -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+} catch {
+    "[{0}] Parent process timeout veya bulunamadı, devam ediliyor." -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+}
+
+# Kalan child process'leri zorla kapat (Qt WebEngine vb.)
+taskkill /F /IM BorsaBot.exe /T 2>$null | Out-Null
+taskkill /F /IM QtWebEngineProcess.exe 2>$null | Out-Null
+Start-Sleep -Milliseconds 1500
+
+# 2) Installer'ı UAC ile başlat ve bekle
+"[{0}] Installer başlatılıyor: $InstallerPath" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+try {
+    $proc = Start-Process -FilePath $InstallerPath `
+        -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$env:TEMP\borsabot_install.log" `
+        -Verb RunAs -PassThru -Wait
+    "[{0}] Installer exit code: $($proc.ExitCode)" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+} catch {
+    "[{0}] Installer hata: $_" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+    exit 1
+}
+
+# 3) Yeni BorsaBot.exe başlat
+Start-Sleep -Milliseconds 1500
+if (Test-Path $AppExe) {
+    "[{0}] Yeni sürüm açılıyor: $AppExe" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+    Start-Process -FilePath $AppExe
+} else {
+    "[{0}] AppExe bulunamadı: $AppExe" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+}
+"[{0}] Helper bitti." -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+'''
+
+        helper_path = Path(tempfile.gettempdir()) / "borsabot_update_helper.ps1"
+        helper_path.write_text(helper_script, encoding="utf-8")
+
+        my_pid = os.getpid()
+        logger.info(
+            "install_via_helper: pid={}, installer={}, app_exe={}, helper={}",
+            my_pid, installer_path, app_exe, helper_path,
+        )
+
+        # Helper'ı bağımsız (detached) process olarak başlat —
+        # bu uygulama kapansa bile yaşamaya devam etsin.
+        try:
+            subprocess.Popen(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-WindowStyle", "Hidden",
+                    "-File", str(helper_path),
+                    "-ParentPid", str(my_pid),
+                    "-InstallerPath", str(installer_path),
+                    "-AppExe", str(app_exe),
+                ],
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0),
+                close_fds=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Helper başlatılamadı: {exc}") from exc
+
+        # Kısa gecikme — helper subprocess oluşsun, sonra app.quit().
+        # Bu süre helper'ın "Wait-Process" çağrısına ulaşmasına yeter.
+        import time
+        time.sleep(1.0)
+
+        logger.info("Helper başlatıldı, uygulama kapanıyor.")
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+        except Exception:  # noqa: BLE001
+            sys.exit(0)
+
+    @staticmethod
     def install(installer_path: Path, silent: bool = True) -> None:
         """İndirilen installer'ı çalıştır + mevcut uygulamayı kapat.
 
