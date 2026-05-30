@@ -1,0 +1,92 @@
+name: Release Build
+
+# Tag push'unda otomatik build (v0.1.2, v1.0.0 vb.)
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:  # GitHub UI'dan elle tetiklenebilir
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 pyqtgraph pyqtdarktheme qtawesome `
+            "SQLAlchemy>=2" alembic psycopg2-binary asyncpg aiosqlite `
+            "pandas==2.2.*" "numpy<2.1" pyarrow `
+            python-dotenv loguru "pydantic>=2" pydantic-settings keyring cryptography `
+            aiohttp httpx beautifulsoup4 feedparser yfinance pandas-datareader `
+            isyatirimhisse plyer Pillow
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller
+
+      - name: Read version from app/__version__.py
+        id: version
+        shell: pwsh
+        run: |
+          $content = Get-Content app/__version__.py -Raw
+          $match = [regex]::Match($content, '__version__\s*=\s*"([^"]+)"')
+          $ver = $match.Groups[1].Value
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          echo "Version: $ver"
+
+      - name: Sync installer.iss version
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          (Get-Content installer.iss) -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$ver`"" | Set-Content installer.iss
+
+      - name: Generate icon
+        run: python scripts/make_icon.py
+
+      - name: PyInstaller build (onedir)
+        run: python scripts/build_exe.py
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe" }
+          & $iscc installer.iss
+
+      - name: Show installer artifact
+        shell: pwsh
+        run: |
+          Get-ChildItem installer_output\*.exe | Format-Table Name, Length
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BorsaBot-Setup-${{ steps.version.outputs.VERSION }}
+          path: installer_output/BorsaBot-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release (tag push'larında)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Borsa Bot ${{ steps.version.outputs.VERSION }}"
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: installer_output/BorsaBot-Setup-*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
