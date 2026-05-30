@@ -265,21 +265,31 @@ class UpdateChecker:
     # ------------------------------------------------------------------ install
 
     @staticmethod
-    def install(installer_path: Path, silent: bool = False) -> None:
+    def install(installer_path: Path, silent: bool = True) -> None:
         """İndirilen installer'ı çalıştır + mevcut uygulamayı kapat.
 
+        Varsayılan tamamen sessiz mod: kullanıcı UI görmez, kurulum
+        arka planda yapılır, bittiğinde yeni sürüm otomatik başlar.
+
         Inno Setup CLI flag'leri:
-          /SILENT             → progress'siz arka plan kurulum
-          /CLOSEAPPLICATIONS  → kullanan exe'yi otomatik kapat
-          /RESTARTAPPLICATIONS → kurulum sonrası tekrar başlat
-          /NORESTART          → Windows yeniden başlatma sormasın
+          /VERYSILENT         → hiçbir pencere/progress göstermez
+          /SUPPRESSMSGBOXES   → kalan tüm onay diyaloglarını bastır
+          /CLOSEAPPLICATIONS  → kullanılmakta olan exe'leri kapat
+          /RESTARTAPPLICATIONS → kurulum sonrası exe'yi tekrar başlat
+          /NORESTART          → Windows reboot dialog'u sormasın
         """
         if not installer_path.exists():
             raise FileNotFoundError(f"Installer yok: {installer_path}")
 
         args: list[str] = [str(installer_path)]
         if silent:
-            args += ["/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS", "/NORESTART"]
+            args += [
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/CLOSEAPPLICATIONS",
+                "/RESTARTAPPLICATIONS",
+                "/NORESTART",
+            ]
 
         # Yeni process başlat — mevcut süreçten bağımsız
         try:

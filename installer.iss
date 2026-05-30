@@ -3,7 +3,7 @@
 ; Çıktı: installer_output\BorsaBot-Setup-X.Y.Z.exe
 
 #define MyAppName "Borsa Bot"
-#define MyAppVersion "0.1.3"
+#define MyAppVersion "0.1.4"
 #define MyAppPublisher "Borsa Bot"
 #define MyAppURL "https://github.com/"
 #define MyAppExeName "BorsaBot.exe"
@@ -58,8 +58,11 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: startupicon
 
 [Run]
-; Kurulum sonrası "Borsa Bot'u şimdi başlat" checkbox
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+; Kurulum sonrası uygulamayı başlat.
+; - Etkileşimli kurulumda: "Borsa Bot'u şimdi başlat" checkbox (postinstall + skipifsilent)
+; - Sessiz güncellemede (/VERYSILENT): runasoriginaluser ile arka planda başlat
+;   (skipifsilent YOK — yoksa otomatik güncellemede yeni sürüm açılmaz)
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall runasoriginaluser
 
 [UninstallDelete]
 ; Uygulama klasöründeki user-generated dosyalar (varsa)

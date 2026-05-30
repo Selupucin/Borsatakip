@@ -630,17 +630,20 @@ class SettingsWidget(QWidget):
         from app.services.updater import UpdateChecker
 
         self._downloaded_installer = installer_path
-        self._update_download_btn.setText("✓ İndirildi — Kurulum başlatılıyor")
+        self._update_download_btn.setText("✓ İndirildi — Arka planda kuruluyor")
         ToastManager.instance().show(
-            "İndirme tamam — installer açılıyor, uygulama kapanacak.",
-            level="success", duration_ms=4000,
+            "İndirme tamam — güncelleme arka planda kuruluyor. "
+            "Uygulama otomatik kapanıp yeniden başlayacak.",
+            level="success", duration_ms=5000,
         )
         # Kısa bir gecikme ile installer başlat (toast görünsün)
         from PySide6.QtCore import QTimer
 
         def _launch():
             try:
-                UpdateChecker.install(installer_path)
+                # silent=True → /VERYSILENT: kullanıcı UI görmez,
+                # /RESTARTAPPLICATIONS sayesinde kurulum sonrası exe geri açılır.
+                UpdateChecker.install(installer_path, silent=True)
             except Exception as exc:  # noqa: BLE001
                 ToastManager.instance().show(
                     f"Installer başlatılamadı: {exc}", level="error"
