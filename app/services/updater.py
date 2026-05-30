@@ -293,7 +293,10 @@ class UpdateChecker:
             # yorumlayıcısı. Bu durumda helper'ı dummy çalıştır (no-op restart).
             app_exe = Path(sys.executable)
 
-        # Helper script — runtime'da %TEMP%'e yazılır
+        # Helper script — runtime'da %TEMP%'e yazılır.
+        # TR karakter YOK — PowerShell default ANSI parser BOM'suz UTF-8'de
+        # 'ş', 'ğ' gibi karakterleri yanlış decode edip script'i parse edemiyor.
+        # ASCII-only + UTF-8-BOM ile yazılır (Windows PowerShell 5 ile uyumlu).
         helper_script = r'''
 param(
     [Parameter(Mandatory=$true)][int]$ParentPid,
@@ -302,46 +305,60 @@ param(
 )
 
 $log = "$env:TEMP\borsabot_update_helper.log"
-"[{0}] Helper başladı. ParentPid={1}" -f (Get-Date -Format "HH:mm:ss"), $ParentPid | Out-File $log -Append
+function Write-LogLine($msg) {
+    $ts = Get-Date -Format "HH:mm:ss"
+    "[$ts] $msg" | Out-File -FilePath $log -Append -Encoding utf8
+}
 
-# 1) Parent process (BorsaBot) kapanmasını bekle
+Write-LogLine "Helper started. ParentPid=$ParentPid"
+Write-LogLine "InstallerPath=$InstallerPath"
+Write-LogLine "AppExe=$AppExe"
+
+# 1) Parent process (BorsaBot) kapanmasini bekle
 try {
     Wait-Process -Id $ParentPid -Timeout 30 -ErrorAction Stop
-    "[{0}] BorsaBot kapandı." -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+    Write-LogLine "BorsaBot closed cleanly."
 } catch {
-    "[{0}] Parent process timeout veya bulunamadı, devam ediliyor." -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+    Write-LogLine "Parent process timeout or not found, continuing. Reason: $_"
 }
 
 # Kalan child process'leri zorla kapat (Qt WebEngine vb.)
-taskkill /F /IM BorsaBot.exe /T 2>$null | Out-Null
-taskkill /F /IM QtWebEngineProcess.exe 2>$null | Out-Null
+try { Stop-Process -Name BorsaBot -Force -ErrorAction SilentlyContinue } catch {}
+try { Stop-Process -Name QtWebEngineProcess -Force -ErrorAction SilentlyContinue } catch {}
 Start-Sleep -Milliseconds 1500
 
-# 2) Installer'ı UAC ile başlat ve bekle
-"[{0}] Installer başlatılıyor: $InstallerPath" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+# 2) Installer'i UAC ile baslat ve bekle
+Write-LogLine "Starting installer: $InstallerPath"
 try {
     $proc = Start-Process -FilePath $InstallerPath `
         -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$env:TEMP\borsabot_install.log" `
         -Verb RunAs -PassThru -Wait
-    "[{0}] Installer exit code: $($proc.ExitCode)" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+    Write-LogLine "Installer exit code: $($proc.ExitCode)"
 } catch {
-    "[{0}] Installer hata: $_" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+    Write-LogLine "Installer error: $_"
     exit 1
 }
 
-# 3) Yeni BorsaBot.exe başlat
+# 3) Yeni BorsaBot.exe baslat
 Start-Sleep -Milliseconds 1500
 if (Test-Path $AppExe) {
-    "[{0}] Yeni sürüm açılıyor: $AppExe" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
-    Start-Process -FilePath $AppExe
+    Write-LogLine "Launching new version: $AppExe"
+    try {
+        Start-Process -FilePath $AppExe
+        Write-LogLine "Launch OK."
+    } catch {
+        Write-LogLine "Launch error: $_"
+    }
 } else {
-    "[{0}] AppExe bulunamadı: $AppExe" -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+    Write-LogLine "AppExe not found: $AppExe"
 }
-"[{0}] Helper bitti." -f (Get-Date -Format "HH:mm:ss") | Out-File $log -Append
+Write-LogLine "Helper done."
 '''
 
         helper_path = Path(tempfile.gettempdir()) / "borsabot_update_helper.ps1"
-        helper_path.write_text(helper_script, encoding="utf-8")
+        # utf-8-sig → BOM eklenir; PowerShell 5 (Windows default) BOM ile
+        # script'i UTF-8 olarak parse eder. BOM olmazsa ANSI varsayar.
+        helper_path.write_text(helper_script, encoding="utf-8-sig")
 
         my_pid = os.getpid()
         logger.info(
@@ -377,12 +394,25 @@ if (Test-Path $AppExe) {
 
         logger.info("Helper başlatıldı, uygulama kapanıyor.")
         try:
+            from PySide6.QtCore import QTimer
             from PySide6.QtWidgets import QApplication
+
             app = QApplication.instance()
             if app is not None:
+                # Önce graceful quit dene (event loop çıkar, cleanup yapar)
                 app.quit()
-        except Exception:  # noqa: BLE001
-            sys.exit(0)
+                # 2 sn sonra Qt eventloop hala kapanmadıysa zorla terminate
+                # (Qt thread'leri veya pending event'ler engelliyor olabilir;
+                # helper yine de devreye girip yeni sürümü açar)
+                def _force_exit():
+                    logger.warning("app.quit() yetmedi, os._exit(0) ile zorla kapatılıyor.")
+                    os._exit(0)
+                QTimer.singleShot(2000, _force_exit)
+            else:
+                os._exit(0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("app.quit() hatası: {} — os._exit(0) ile zorla.", exc)
+            os._exit(0)
 
     @staticmethod
     def install(installer_path: Path, silent: bool = True) -> None:
