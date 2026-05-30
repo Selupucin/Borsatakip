@@ -7,6 +7,10 @@ on:
       - "v*.*.*"
   workflow_dispatch:  # GitHub UI'dan elle tetiklenebilir
 
+# GITHUB_TOKEN'a release oluşturma yetkisi ver (default read-only)
+permissions:
+  contents: write
+
 jobs:
   build-installer:
     runs-on: windows-latest
