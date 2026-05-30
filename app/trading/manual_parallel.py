@@ -210,12 +210,15 @@ class ManualParallelService:
             )
 
             # DISTINCT (instrument, timeframe) en yeni recommendation alt sorgusu
+            # — kullanıcının "Reddet" tıkladığı (dismissed_at NOT NULL) kayıtlar
+            # zaten listede gözükmemeli, bu yüzden subquery'de de filtrele.
             latest_subq = (
                 select(
                     Recommendation.instrument_id.label("inst_id"),
                     Recommendation.timeframe.label("tf"),
                     func.max(Recommendation.generated_at).label("max_at"),
                 )
+                .where(Recommendation.dismissed_at.is_(None))
                 .group_by(Recommendation.instrument_id, Recommendation.timeframe)
                 .subquery()
             )
@@ -238,6 +241,7 @@ class ManualParallelService:
                 .join(Instrument, Instrument.id == Recommendation.instrument_id)
                 .where(
                     Recommendation.action != "HOLD",
+                    Recommendation.dismissed_at.is_(None),
                     ~select(Portfolio.id)
                     .where(
                         and_(
@@ -425,21 +429,35 @@ class ManualParallelService:
         recommendation_id: int,
         notes: str = "",
     ) -> None:
-        """Kullanıcı öneriyi atladı — sadece audit log.
+        """Kullanıcı öneriyi atladı/reddetti — ``recommendations.dismissed_at``
+        sütununa şu an damgalanır. Pending sorgusu bu kayıtları artık döndürmez.
 
-        Notes
-        -----
-        DB'de "skipped" için ayrı tablo tutmuyoruz (öneri sayısı çoktur,
-        ek tablo gereksiz). Sonradan istatistik için "pending olan +
-        belli süre geçmiş = skipped" varsayımı kullanılır.
-        Bu metod yalnızca loguru'ya yapılandırılmış kayıt düşer.
+        Bot bir sonraki tick'te aynı hisseye yeni bir öneri üretirse o
+        recommendation taze ``id`` ile listede görünür (kullanıcı kararı
+        eski öneriye özgüdür, gelecek önerilere değil).
         """
 
-        logger.info(
-            "manual_parallel skipped: rec_id={}, notes={!r}",
-            recommendation_id,
-            notes,
-        )
+        from app.db.models import Recommendation  # noqa: WPS433
+
+        session = self._session()
+        try:
+            rec = session.get(Recommendation, int(recommendation_id))
+            if rec is None:
+                logger.warning(
+                    "mark_skipped: rec_id={} bulunamadı.", recommendation_id
+                )
+                return
+            rec.dismissed_at = datetime.now(tz=timezone.utc)
+            session.commit()
+            logger.info(
+                "manual_parallel dismissed: rec_id={}, notes={!r}",
+                recommendation_id,
+                notes,
+            )
+        except Exception as exc:  # noqa: BLE001
+            session.rollback()
+            logger.error("mark_skipped DB hata: {}", exc)
+            raise
 
     # ------------------------------------------------------------- stats
 

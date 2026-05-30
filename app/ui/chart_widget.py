@@ -131,28 +131,35 @@ _TV_SPECIAL_MAP: dict[str, str] = {
 def _tv_symbol(ticker: str, exchange: str = "") -> str:
     """Ticker + exchange → TradingView symbol stringi.
 
-    Önce özel haritaya (endeks/emtia/döviz) bakar.
-    Sonra borsa kodundan ``BIST:`` / ``NASDAQ:`` / ``NYSE:`` türetir.
-    Belirsizse sadece ticker döner — TradingView en uygun borsayı bulur.
+    Öncelik sırası (en güveniliriden en heuristik'e):
+      1) Özel sembol haritası (endeks/emtia/döviz)
+      2) Açık ``exchange`` parametresi (DB'den geliyorsa hep doluyu kullan)
+      3) yfinance suffix'leri (``.IS`` → BIST, ``.L`` → LSE, vb.)
+      4) Ticker uzunluk + alfa karakter heuristic'i (4–6 harf BIST varsayımı)
     """
     t_raw = (ticker or "").upper().strip()
     if not t_raw:
         return ""
 
-    # Özel sembol (endeks, emtia, döviz)
+    # 1) Özel sembol (endeks, emtia, döviz)
     if t_raw in _TV_SPECIAL_MAP:
         return _TV_SPECIAL_MAP[t_raw]
 
-    # yfinance suffix'lerini temizle (.IS, .L, .DE vb.)
-    t = t_raw
-    if t.endswith(".IS"):
-        return f"BIST:{t[:-3]}"
-    for sfx in (".L", ".DE", ".PA", ".AS", ".HK", ".SS", ".SZ", ".TO"):
-        if t.endswith(sfx):
-            t = t[: -len(sfx)]
-            break
-
+    # 2) Açık exchange parametresi en güvenilir kaynak (DB'den geliyor)
     ex = (exchange or "").upper().strip()
+    t = t_raw
+
+    # yfinance suffix'lerini temizle ki ex prefix ile çakışmasın
+    if t.endswith(".IS"):
+        t = t[:-3]
+        if not ex:
+            ex = "BIST"
+    else:
+        for sfx in (".L", ".DE", ".PA", ".AS", ".HK", ".SS", ".SZ", ".TO"):
+            if t.endswith(sfx):
+                t = t[: -len(sfx)]
+                break
+
     if ex == "BIST":
         return f"BIST:{t}"
     if ex == "NYSE":
@@ -164,10 +171,11 @@ def _tv_symbol(ticker: str, exchange: str = "") -> str:
     if ex and ex in _TV_EXCHANGE_MAP:
         return f"{_TV_EXCHANGE_MAP[ex]}:{t}"
 
-    # Heuristik:
-    # - 5 harfli pür alfabetik → BIST (THYAO, ASELS, GARAN)
-    # - Aksi → prefix'siz; TradingView otomatik bulur
-    if len(t) == 5 and t.isalpha() and t.isascii():
+    # 3) Heuristic — exchange bilinmiyor:
+    #    - 5–6 harfli pür alfabetik → BIST tahmin (THYAO/AKBNK/EREGL/KCHOL/HEKTS…)
+    #      (ABD ticker'ları neredeyse hep 1–4 harf; 5+ harf nadir → ayırt edici)
+    #    - 1–4 harf → prefix'siz; TradingView en uygun borsayı (US) bulur
+    if 5 <= len(t) <= 6 and t.isalpha() and t.isascii():
         return f"BIST:{t}"
     return t
 
@@ -278,6 +286,17 @@ class ChartWidget(QWidget):
         self._reload_button.clicked.connect(self._on_reload_clicked)
         toolbar.addWidget(self._reload_button)
 
+        # Grafik yüklenmese veya sembol haritalanamasa bile her durumda
+        # kullanıcının TradingView'a tarayıcıdan ulaşabileceği bir buton.
+        self._tv_open_button = QPushButton("🔗 TradingView")
+        self._tv_open_button.setToolTip(
+            "Seçili hisseyi TradingView'da tarayıcıda aç "
+            "(gömülü grafik yüklenmediyse veya başka bir endpoint denemek için)"
+        )
+        self._tv_open_button.setEnabled(False)
+        self._tv_open_button.clicked.connect(self._on_tv_open_clicked)
+        toolbar.addWidget(self._tv_open_button)
+
         toolbar.addStretch(1)
 
         # Sağda küçük not — kullanıcıya mimariyi açıkla
@@ -305,6 +324,8 @@ class ChartWidget(QWidget):
             self._web_view.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
+            # Load fail durumunda kullanıcıya açık uyarı + tarayıcı linki ver
+            self._web_view.loadFinished.connect(self._on_load_finished)
             self._chart_host_layout.addWidget(self._web_view)
             self._show_placeholder(
                 "Sembol seçmek için yukarıdaki 'Hisse Seç' butonuna tıkla."
@@ -356,6 +377,22 @@ class ChartWidget(QWidget):
         if self._current_ticker:
             self.load_ticker(self._current_ticker, self._current_exchange)
 
+    def _on_tv_open_clicked(self) -> None:
+        """TradingView landing page'ini sistem tarayıcısında aç."""
+        if not self._current_ticker:
+            return
+        from PySide6.QtGui import QDesktopServices
+
+        symbol = _tv_symbol(self._current_ticker, self._current_exchange)
+        url = _build_tv_landing_url(symbol)
+        try:
+            QDesktopServices.openUrl(QUrl(url))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TradingView URL açılamadı: {}", exc)
+            ToastManager.instance().show(
+                f"Tarayıcı açılamadı: {url}", level="warning"
+            )
+
     def _on_timeframe_changed(self, _index: int) -> None:
         if self._current_ticker:
             self.load_ticker(self._current_ticker, self._current_exchange)
@@ -384,6 +421,7 @@ class ChartWidget(QWidget):
         else:
             self._ticker_label.setText(self._current_ticker)
         self._reload_button.setEnabled(True)
+        self._tv_open_button.setEnabled(True)
 
         # Timeframe seçimi
         interval = self._timeframe_combo.currentData() or "D"
@@ -473,6 +511,21 @@ class ChartWidget(QWidget):
 
         self._chart_host_layout.addWidget(container)
         self._fallback_link = info
+
+    def _on_load_finished(self, ok: bool) -> None:
+        """QWebEngineView load tamamlandı — başarısızsa kullanıcıya bildir."""
+        if ok or not self._current_ticker:
+            return
+        symbol = _tv_symbol(self._current_ticker, self._current_exchange)
+        logger.warning(
+            "TradingView grafik yüklenemedi: symbol={} — fallback'e geçiliyor.",
+            symbol,
+        )
+        ToastManager.instance().show(
+            f"Grafik yüklenmedi ({symbol}). "
+            f"Üst toolbar'daki '🔗 TradingView' butonu ile tarayıcıda aç.",
+            level="warning",
+        )
 
     # Geriye uyumluluk — eski API metodları (no-op).
     def add_indicator(self, name: str, series) -> None:  # noqa: ANN001

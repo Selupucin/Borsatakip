@@ -262,6 +262,10 @@ class Recommendation(Base):
     tech_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2))
     sentiment_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2))
     fundamental_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2))
+    # Kullanıcı "Reddet" tıkladığında doldurulur — pending listeden çıkarmak için.
+    dismissed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     instrument: Mapped["Instrument"] = relationship(back_populates="recommendations")
 

@@ -29,6 +29,43 @@ from app.ui.main_window import MainWindow
 from app.ui.theme_manager import ThemeManager
 
 
+def _apply_lightweight_migrations() -> None:
+    """Mevcut DB üzerinde küçük ALTER TABLE migration'larını uygula (idempotent).
+
+    Alembic kurmadan, yeni sürümde eklenen kolonları SQLite üzerine
+    elle ekler. Her migration güvenli bir şekilde "varsa atla" mantığıyla
+    çalışır; başarısızlık logger.warning ile geçilir (kullanıcı oturumu kesilmez).
+    """
+    from sqlalchemy import inspect, text
+
+    from app.db.session import get_sync_engine
+
+    engine = get_sync_engine()
+    inspector = inspect(engine)
+
+    migrations: list[tuple[str, str, str]] = [
+        # (tablo, kolon, ALTER deyimi)
+        (
+            "recommendations",
+            "dismissed_at",
+            "ALTER TABLE recommendations ADD COLUMN dismissed_at TIMESTAMP NULL",
+        ),
+    ]
+
+    with engine.begin() as conn:
+        for table, column, ddl in migrations:
+            try:
+                if table not in inspector.get_table_names():
+                    continue
+                cols = {c["name"] for c in inspector.get_columns(table)}
+                if column in cols:
+                    continue
+                logger.info("Migration: {}.{} ekleniyor", table, column)
+                conn.execute(text(ddl))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Migration başarısız ({}.{}): {}", table, column, exc)
+
+
 def _ensure_first_run_bootstrap() -> None:
     """İlk açılış: DB yoksa şema kur + temel verileri seed et.
 
@@ -38,6 +75,8 @@ def _ensure_first_run_bootstrap() -> None:
     db_path = Path(settings.resolved_sqlite_path)
     if db_path.exists() and db_path.stat().st_size > 0:
         logger.info("Mevcut DB bulundu: {}", db_path)
+        # Yeni sürümde eklenen kolonları mevcut DB'ye uygula
+        _apply_lightweight_migrations()
         return
 
     logger.info("İlk açılış — DB kuruluyor: {}", db_path)
