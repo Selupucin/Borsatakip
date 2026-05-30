@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -254,8 +255,6 @@ class SettingsWidget(QWidget):
 
         # Kill switch — tek buton (önceki checkbox kaldırıldı, başka
         # yerlerde de gösterilmiyor; sadece burası tetikleyici).
-        from PySide6.QtWidgets import QPushButton  # noqa: WPS433
-
         self._kill_switch_btn = QPushButton("⛔ Kill Switch'i Aktive Et")
         self._kill_switch_btn.setStyleSheet(
             "QPushButton { background-color: #C62828; color: white; "
@@ -369,8 +368,6 @@ class SettingsWidget(QWidget):
         update_layout.addRow(upd_btn_row)
 
         # İndirme progress bar — sadece indirme sırasında görünür.
-        from PySide6.QtWidgets import QProgressBar  # noqa: WPS433
-
         self._update_progress = QProgressBar()
         self._update_progress.setRange(0, 100)
         self._update_progress.setValue(0)
