@@ -243,17 +243,24 @@ class PositionService:
                 # opened_at korunur (pozisyonun yaşı)
 
             # 3) wallet cash
-            wallet.cash_balance = float(cash - total_cost)
+            # Manuel-eşli modda (skip_cash_check=True) kullanıcı gerçek alımı
+            # KENDİ aracı kurum hesabından yaptı; BorsaBot'un sanal cüzdan
+            # nakdine dokunmuyoruz (yoksa tahsis edilmemiş cüzdanlar negatif
+            # bakiyeye düşüyordu). Sadece pozisyonu takip ederiz.
+            if not skip_cash_check:
+                wallet.cash_balance = float(cash - total_cost)
 
-            # 4) cash flow audit
+            # 4) cash flow audit — manuel modda da log düşelim ki kullanıcı
+            # nakit akışını izleyebilsin (sadece bookkeeping, real impact yok).
+            note_prefix = "BUY (manuel-eşli, dış cüzdandan)" if skip_cash_check else "BUY"
             session.add(
                 CashFlow(
                     account_id=int(wallet.account_id),
                     wallet_id=int(wallet_id),
                     flow_type="trade_buy",
-                    amount=float(-total_cost),
+                    amount=float(0 if skip_cash_check else -total_cost),
                     notes=(
-                        f"BUY {qty} @ {prc} (comm={comm}) instr={instrument_id} "
+                        f"{note_prefix} {qty} @ {prc} (comm={comm}) instr={instrument_id} "
                         f"tx={tx_id}"
                     ),
                 )
@@ -413,18 +420,23 @@ class PositionService:
                     pos.quantity = float(new_qty)
                     # avg_cost aynı kalır
 
-            wallet.cash_balance = float(
-                self._to_decimal(wallet.cash_balance, Decimal("0")) + net_cash_in
-            )
+            # Manuel-eşli modda (skip_position_check=True) gerçek satış
+            # kullanıcının aracı kurum hesabında yapılır; sanal cüzdan
+            # nakdine dokunma (BUY tarafıyla simetrik tutmak için).
+            if not skip_position_check:
+                wallet.cash_balance = float(
+                    self._to_decimal(wallet.cash_balance, Decimal("0")) + net_cash_in
+                )
 
+            note_prefix = "SELL (manuel-eşli, dış cüzdana)" if skip_position_check else "SELL"
             session.add(
                 CashFlow(
                     account_id=int(wallet.account_id),
                     wallet_id=int(wallet_id),
                     flow_type="trade_sell",
-                    amount=float(net_cash_in),
+                    amount=float(0 if skip_position_check else net_cash_in),
                     notes=(
-                        f"SELL {qty} @ {prc} (comm={comm}, "
+                        f"{note_prefix} {qty} @ {prc} (comm={comm}, "
                         f"realized={realized}) instr={instrument_id} tx={tx_id}"
                     ),
                 )

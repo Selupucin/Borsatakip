@@ -134,10 +134,8 @@ class SettingsWidget(QWidget):
                     self._trading_mode_combo.setCurrentIndex(i)
                     self._trading_mode_combo.blockSignals(False)
                     break
-            self._risk_slider.blockSignals(True)
-            self._risk_slider.setValue(int(snapshot.risk_threshold))
-            self._risk_value_lbl.setText(str(int(snapshot.risk_threshold)))
-            self._risk_slider.blockSignals(False)
+            # Risk slider kaldırıldı; risk_threshold artık sadece
+            # TradingWidget'ta yönetiliyor.
         except Exception as exc:  # noqa: BLE001
             logger.debug("settings._on_account_loaded hata: {}", exc)
 
@@ -236,21 +234,8 @@ class SettingsWidget(QWidget):
         self._trading_mode_combo.currentIndexChanged.connect(self._on_trading_mode_changed)
         trading_layout.addRow("İşlem Modu:", self._trading_mode_combo)
 
-        # Risk eşiği slider
-        risk_row = QHBoxLayout()
-        self._risk_slider = QSlider(Qt.Orientation.Horizontal)
-        self._risk_slider.setRange(0, 100)
-        self._risk_slider.setValue(50)
-        self._risk_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._risk_slider.setTickInterval(10)
-        self._risk_value_lbl = QLabel("50")
-        self._risk_value_lbl.setMinimumWidth(30)
-        self._risk_slider.valueChanged.connect(self._on_risk_threshold_changed)
-        risk_row.addWidget(self._risk_slider, stretch=1)
-        risk_row.addWidget(self._risk_value_lbl)
-        risk_container = QWidget()
-        risk_container.setLayout(risk_row)
-        trading_layout.addRow("Risk Eşiği:", risk_container)
+        # Risk eşiği slider'ı KALDIRILDI — sadece İşlem & Otomasyon
+        # ekranında bulunur (kullanıcı talebi: tek yerden yönetim).
 
         # Günlük işlem limiti
         self._daily_limit = QSpinBox()
@@ -267,13 +252,23 @@ class SettingsWidget(QWidget):
         self._max_drawdown.setSuffix(" %")
         trading_layout.addRow("Maks. Drawdown:", self._max_drawdown)
 
-        # Kill switch toggle
-        self._kill_switch_toggle = QCheckBox("Kill Switch — tüm otomatik işlemleri durdur")
-        self._kill_switch_toggle.setStyleSheet(
-            "QCheckBox { color: #C62828; font-weight: 700; }"
+        # Kill switch — tek buton (önceki checkbox kaldırıldı, başka
+        # yerlerde de gösterilmiyor; sadece burası tetikleyici).
+        from PySide6.QtWidgets import QPushButton  # noqa: WPS433
+
+        self._kill_switch_btn = QPushButton("⛔ Kill Switch'i Aktive Et")
+        self._kill_switch_btn.setStyleSheet(
+            "QPushButton { background-color: #C62828; color: white; "
+            "font-weight: 700; padding: 8px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #B71C1C; }"
         )
-        self._kill_switch_toggle.toggled.connect(self._on_kill_switch_toggled)
-        trading_layout.addRow(self._kill_switch_toggle)
+        self._kill_switch_btn.setToolTip(
+            "Tüm otomatik işlemleri anında durdurur. "
+            "Devre dışı bırakmak için tekrar tıkla."
+        )
+        self._kill_switch_btn.clicked.connect(self._on_kill_switch_clicked)
+        self._kill_switch_state = False  # local cache; bridge'den senkronize
+        trading_layout.addRow(self._kill_switch_btn)
 
         trading_hint = QLabel(
             "Trading ayarları runtime'da uygulanır. Faz 4'te AccountService "
@@ -451,41 +446,16 @@ class SettingsWidget(QWidget):
             ),
         )
 
-    @Slot(int)
-    def _on_risk_threshold_changed(self, value: int) -> None:
-        """Slider hareket ederken UI; DB'ye yazımı 350ms debounce."""
-        from PySide6.QtCore import QTimer
+    # Risk threshold handlers KALDIRILDI — yalnız TradingWidget'ta.
 
-        self._risk_value_lbl.setText(str(value))
+    @Slot()
+    def _on_kill_switch_clicked(self) -> None:
+        """Kill switch buton tıklaması — toggle (aktif ↔ pasif).
 
-        if not hasattr(self, "_risk_debounce_timer"):
-            self._risk_debounce_timer = QTimer(self)
-            self._risk_debounce_timer.setSingleShot(True)
-            self._risk_debounce_timer.timeout.connect(self._commit_risk_threshold)
-        self._risk_pending_value = float(value)
-        self._risk_debounce_timer.start(350)
-
-    def _commit_risk_threshold(self) -> None:
-        value = getattr(self, "_risk_pending_value", None)
-        if value is None:
-            return
-        if (
-            self._bridge is None
-            or not self._bridge.available
-            or self._bridge.account_id is None
-        ):
-            return
-        bridge = self._bridge
-        account_id = int(bridge.account_id)
-        bridge.run_async(
-            lambda: bridge.account.set_risk_threshold(account_id, value),
-            on_success=lambda _r: None,
-            on_error=lambda exc: logger.debug("risk_threshold hata: {}", exc),
-        )
-
-    @Slot(bool)
-    def _on_kill_switch_toggled(self, checked: bool) -> None:
-        if checked:
+        Önceki checkbox kaldırıldı; tek kontrol noktası bu buton.
+        """
+        new_state = not self._kill_switch_state
+        if new_state:
             confirm = QMessageBox.question(
                 self,
                 "Kill Switch Aktifleştir",
@@ -494,13 +464,17 @@ class SettingsWidget(QWidget):
                 QMessageBox.StandardButton.No,
             )
             if confirm != QMessageBox.StandardButton.Yes:
-                self._kill_switch_toggle.blockSignals(True)
-                self._kill_switch_toggle.setChecked(False)
-                self._kill_switch_toggle.blockSignals(False)
                 return
             if self._bridge and self._bridge.available and self._bridge.safety:
                 try:
-                    self._bridge.safety.activate_kill_switch(reason="settings_toggle")
+                    self._bridge.safety.activate_kill_switch(reason="settings_button")
+                    self._kill_switch_state = True
+                    self._kill_switch_btn.setText("✓ Kill Switch'i Devre Dışı Bırak")
+                    self._kill_switch_btn.setStyleSheet(
+                        "QPushButton { background-color: #FF6F00; color: white; "
+                        "font-weight: 700; padding: 8px 16px; border-radius: 4px; }"
+                        "QPushButton:hover { background-color: #E65100; }"
+                    )
                     ToastManager.instance().show(
                         "Kill Switch aktif edildi.", level="warning"
                     )
@@ -512,6 +486,13 @@ class SettingsWidget(QWidget):
             if self._bridge and self._bridge.available and self._bridge.safety:
                 try:
                     self._bridge.safety.deactivate_kill_switch(user_confirmation=True)
+                    self._kill_switch_state = False
+                    self._kill_switch_btn.setText("⛔ Kill Switch'i Aktive Et")
+                    self._kill_switch_btn.setStyleSheet(
+                        "QPushButton { background-color: #C62828; color: white; "
+                        "font-weight: 700; padding: 8px 16px; border-radius: 4px; }"
+                        "QPushButton:hover { background-color: #B71C1C; }"
+                    )
                     ToastManager.instance().show(
                         "Kill Switch pasif edildi.", level="success"
                     )

@@ -479,15 +479,19 @@ class _TimeframeTabContent(QWidget):
             ticker_item.setData(Qt.ItemDataRole.UserRole, pick)
             self._table.setItem(row, 0, ticker_item)
 
-            # Aksiyon rozeti
+            # Aksiyon rozeti — CellWidget olarak (QSS sıralama/seçim
+            # state'inde setBackground'ı override etmesin diye QLabel ile)
             bg, fg, label = ACTION_PALETTE.get(pick.action, ACTION_PALETTE["HOLD"])
+            badge_lbl = QLabel(label)
+            badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge_lbl.setStyleSheet(
+                f"background-color: {bg}; color: {fg}; "
+                f"font-weight: 700; border-radius: 6px; padding: 2px 8px; "
+                f"margin: 4px;"
+            )
+            self._table.setCellWidget(row, 1, badge_lbl)
+            # Sort için görünmez item (display string'i ile)
             action_item = QTableWidgetItem(label)
-            action_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            action_item.setForeground(QBrush(QColor(fg)))
-            action_item.setBackground(QBrush(QColor(bg)))
-            af = QFont(action_item.font())
-            af.setBold(True)
-            action_item.setFont(af)
             self._table.setItem(row, 1, action_item)
 
             # Güven

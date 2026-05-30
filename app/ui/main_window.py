@@ -301,30 +301,25 @@ class MainWindow(QMainWindow):
         self._theme_action.triggered.connect(self._theme_manager.toggle_theme)
         toolbar.addAction(self._theme_action)
 
-        # Esnek boşluk — sağdaki kill switch + ayarlar action'ını sağ kenara iter
+        # Esnek boşluk — sağdaki bot durumu + ayarlar action'ını sağ kenara iter
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
 
-        # KILL SWITCH — toolbar sağ tarafında her zaman erişilebilir.
-        # Trading ekranı içindeki kopyasından bağımsız; her ikisi aynı SafetyEngine'i
-        # tetikler (Faz 4'te bağlanacak).
-        self._kill_switch_btn = KillSwitchButton(self)
-        # Toolbar boyutuna sığsın diye biraz küçült
-        self._kill_switch_btn.setMinimumHeight(36)
-        self._kill_switch_btn.setMinimumWidth(120)
-        self._kill_switch_btn.setStyleSheet(
-            "QPushButton { background-color: #C62828; color: white; "
-            "font-size: 11pt; font-weight: 800; border-radius: 6px; "
+        # BOT DURUM GÖSTERGESİ — kill switch yerine artık burada.
+        # Kill switch tek kontrol noktası Ayarlar ekranındadır.
+        # Yeşil "● Bot Aktif" = scheduler çalışıyor ve kill switch kapalı.
+        # Kırmızı "● Bot Durduruldu" = kill switch aktif veya scheduler dursurulmuş.
+        self._bot_status_label = QLabel("● Bot Aktif")
+        self._bot_status_label.setStyleSheet(
+            "QLabel { color: #2E7D32; font-weight: 800; font-size: 11pt; "
             "padding: 4px 12px; }"
-            "QPushButton:hover { background-color: #B71C1C; }"
-            "QPushButton:pressed { background-color: #8B0000; }"
         )
-        self._kill_switch_btn.setToolTip(
-            "Tüm otomatik işlemleri durdur — Ctrl+Shift+K"
+        self._bot_status_label.setToolTip(
+            "Bot scheduler durumu — Yeşil: çalışıyor, Kırmızı: durduruldu.\n"
+            "Durdurmak için: Ayarlar → Kill Switch."
         )
-        self._kill_switch_btn.activated.connect(self._on_global_kill_switch)
-        toolbar.addWidget(self._kill_switch_btn)
+        toolbar.addWidget(self._bot_status_label)
 
         toolbar.addSeparator()
 
@@ -436,6 +431,34 @@ class MainWindow(QMainWindow):
                 chart.load_ticker(ticker)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("ChartWidget.load_ticker hata: {}", exc)
+
+    def set_bot_status(self, active: bool, reason: str = "") -> None:
+        """Toolbar'daki bot durum göstergesini güncelle.
+
+        ``active=True`` → yeşil "Bot Aktif"
+        ``active=False`` → kırmızı "Bot Durduruldu" (+ tooltip neden)
+        """
+        if active:
+            self._bot_status_label.setText("● Bot Aktif")
+            self._bot_status_label.setStyleSheet(
+                "QLabel { color: #2E7D32; font-weight: 800; font-size: 11pt; "
+                "padding: 4px 12px; }"
+            )
+            self._bot_status_label.setToolTip(
+                "Bot scheduler çalışıyor — fiyat, indikatör ve öneri\n"
+                "döngüleri aktif. Durdurmak için: Ayarlar → Kill Switch."
+            )
+        else:
+            self._bot_status_label.setText("● Bot Durduruldu")
+            self._bot_status_label.setStyleSheet(
+                "QLabel { color: #C62828; font-weight: 800; font-size: 11pt; "
+                "padding: 4px 12px; }"
+            )
+            tip = "Bot durduruldu — otomatik işlemler devre dışı."
+            if reason:
+                tip += f"\nSebep: {reason}"
+            tip += "\nYeniden başlatmak için: Ayarlar → Kill Switch."
+            self._bot_status_label.setToolTip(tip)
 
     def set_update_available(self, latest_version: str | None) -> None:
         """Sidebar 'Ayarlar' item'ına 'Güncelleme ●' rozet uygula/kaldır.

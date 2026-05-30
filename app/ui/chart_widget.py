@@ -297,6 +297,17 @@ class ChartWidget(QWidget):
         self._tv_open_button.clicked.connect(self._on_tv_open_clicked)
         toolbar.addWidget(self._tv_open_button)
 
+        # Yahoo Finance alternatifi — TradingView BIST hisseleri için bazen
+        # "Pro üyelik" popup'ı gösteriyor; Yahoo Finance ücretsiz alternatif.
+        self._yf_open_button = QPushButton("📊 Yahoo Finance")
+        self._yf_open_button.setToolTip(
+            "Seçili hisseyi Yahoo Finance'da tarayıcıda aç "
+            "(BIST için TradingView'ın yüklemediği durumlarda alternatif)"
+        )
+        self._yf_open_button.setEnabled(False)
+        self._yf_open_button.clicked.connect(self._on_yf_open_clicked)
+        toolbar.addWidget(self._yf_open_button)
+
         toolbar.addStretch(1)
 
         # Sağda küçük not — kullanıcıya mimariyi açıkla
@@ -393,6 +404,26 @@ class ChartWidget(QWidget):
                 f"Tarayıcı açılamadı: {url}", level="warning"
             )
 
+    def _on_yf_open_clicked(self) -> None:
+        """Yahoo Finance quote sayfasını sistem tarayıcısında aç."""
+        if not self._current_ticker:
+            return
+        from PySide6.QtGui import QDesktopServices
+
+        # BIST hisseleri için .IS suffix, US için doğrudan ticker.
+        yf_ticker = self._current_ticker.upper()
+        ex = (self._current_exchange or "").upper()
+        if ex == "BIST" and not yf_ticker.endswith(".IS"):
+            yf_ticker = f"{yf_ticker}.IS"
+        url = f"https://finance.yahoo.com/quote/{quote(yf_ticker)}/"
+        try:
+            QDesktopServices.openUrl(QUrl(url))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Yahoo Finance URL açılamadı: {}", exc)
+            ToastManager.instance().show(
+                f"Tarayıcı açılamadı: {url}", level="warning"
+            )
+
     def _on_timeframe_changed(self, _index: int) -> None:
         if self._current_ticker:
             self.load_ticker(self._current_ticker, self._current_exchange)
@@ -422,6 +453,7 @@ class ChartWidget(QWidget):
             self._ticker_label.setText(self._current_ticker)
         self._reload_button.setEnabled(True)
         self._tv_open_button.setEnabled(True)
+        self._yf_open_button.setEnabled(True)
 
         # Timeframe seçimi
         interval = self._timeframe_combo.currentData() or "D"

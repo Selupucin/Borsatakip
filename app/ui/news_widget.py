@@ -92,12 +92,18 @@ EXCHANGE_FILTERS: tuple[tuple[str, str], ...] = (
 )
 
 #: Tarih aralığı filtresi — (key, label, lookback_days). ``None`` = sınırsız.
+#: Default: "Son 3 gün" — kullanıcı talebi (sadece bugün gelen değil,
+#: son birkaç günün haberleri de görünsün ki bot okuma fırsatı bulsun).
 DATE_FILTERS: tuple[tuple[str, str, Optional[int]], ...] = (
     ("today", "Bugün", 1),
+    ("3d", "Son 3 gün", 3),
     ("7d", "Son 7 gün", 7),
     ("30d", "Son 30 gün", 30),
     ("all", "Tümü", None),
 )
+
+#: Açılışta seçili olacak default filtre.
+DEFAULT_DATE_FILTER = "3d"
 
 
 # ---------------------------------------------------------------------------
@@ -494,11 +500,15 @@ class NewsWidget(QWidget):
         self._lang_combo.setToolTip("Dile göre filtrele")
         self._lang_combo.currentIndexChanged.connect(self._apply_filters)
 
-        # Tarih aralığı
+        # Tarih aralığı — varsayılan: Son 3 gün (kullanıcı tek günlük
+        # haberlerle çok dar görüyordu, 3 gün makul taban).
         self._date_combo = QComboBox()
         for key, label, _days in DATE_FILTERS:
             self._date_combo.addItem(label, userData=key)
-        self._date_combo.setCurrentIndex(2)  # "Son 30 gün" varsayılan
+        for i in range(self._date_combo.count()):
+            if self._date_combo.itemData(i) == DEFAULT_DATE_FILTER:
+                self._date_combo.setCurrentIndex(i)
+                break
         self._date_combo.setToolTip("Yayın tarihine göre filtrele")
         self._date_combo.currentIndexChanged.connect(self._apply_filters)
 

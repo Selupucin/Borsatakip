@@ -209,9 +209,26 @@ class ManualParallelService:
                 .all()
             )
 
+            # Kullanıcının son 24 saat içinde "Reddet" tıkladığı
+            # (instrument, timeframe) kombinasyonlarını sustur — bot
+            # birkaç dakika sonra aynı hisseye yeni öneri üretse bile
+            # kullanıcı kararına saygı duy.
+            from datetime import timedelta  # noqa: WPS433
+
+            dismiss_cooldown = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            recently_dismissed_subq = (
+                select(
+                    Recommendation.instrument_id.label("dis_inst"),
+                    Recommendation.timeframe.label("dis_tf"),
+                )
+                .where(Recommendation.dismissed_at.is_not(None))
+                .where(Recommendation.dismissed_at >= dismiss_cooldown)
+                .distinct()
+                .subquery()
+            )
+
             # DISTINCT (instrument, timeframe) en yeni recommendation alt sorgusu
-            # — kullanıcının "Reddet" tıkladığı (dismissed_at NOT NULL) kayıtlar
-            # zaten listede gözükmemeli, bu yüzden subquery'de de filtrele.
+            # — dismissed olanlar zaten subquery'de de filtrelenir.
             latest_subq = (
                 select(
                     Recommendation.instrument_id.label("inst_id"),
@@ -242,6 +259,18 @@ class ManualParallelService:
                 .where(
                     Recommendation.action != "HOLD",
                     Recommendation.dismissed_at.is_(None),
+                    # Son 24 saatte reddedilen (instrument, timeframe)
+                    # kombinasyonu için yeni öneri de gösterme.
+                    ~select(recently_dismissed_subq.c.dis_inst)
+                    .where(
+                        and_(
+                            recently_dismissed_subq.c.dis_inst
+                            == Recommendation.instrument_id,
+                            recently_dismissed_subq.c.dis_tf
+                            == Recommendation.timeframe,
+                        )
+                    )
+                    .exists(),
                     ~select(Portfolio.id)
                     .where(
                         and_(

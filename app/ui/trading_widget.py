@@ -235,12 +235,11 @@ class TradingWidget(QWidget):
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        # Üst kabuk: başlık + Kill Switch sabit, alt içerik scroll edilebilir.
+        # Üst kabuk: sadece başlık (Kill Switch artık yalnız Ayarlar'da).
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 8)
         outer.setSpacing(8)
 
-        # Başlık + Kill Switch (toolbar — sabit kalır)
         header = QHBoxLayout()
         title = QLabel("İşlem & Otomasyon")
         tf = QFont(title.font())
@@ -249,9 +248,6 @@ class TradingWidget(QWidget):
         title.setFont(tf)
         header.addWidget(title)
         header.addStretch(1)
-        self._kill_switch = KillSwitchButton(self)
-        self._kill_switch.activated.connect(self._on_kill_switch_activated)
-        header.addWidget(self._kill_switch)
         outer.addLayout(header)
 
         # Onboarding HelpBanner
