@@ -369,9 +369,11 @@ class MainWindow(QMainWindow):
             sc = QShortcut(QKeySequence(sequence), self)
             sc.activated.connect(lambda k=key: self._goto_screen(k))
 
-        # Kill Switch global kısayolu — her ekrandan tetiklenir
+        # Kill Switch global kısayolu kaldırıldı — Kill Switch artık
+        # sadece Ayarlar ekranında bulunur, toolbar'daki kopyası kaldırıldı.
+        # Ctrl+Shift+K basanlar Ayarlar'a yönlendirilir.
         kill_sc = QShortcut(QKeySequence("Ctrl+Shift+K"), self)
-        kill_sc.activated.connect(self._kill_switch_btn.click)
+        kill_sc.activated.connect(self._goto_settings)
 
     # ------------------------------------------------------------------
     # Davranış

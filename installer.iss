@@ -3,7 +3,7 @@
 ; Çıktı: installer_output\BorsaBot-Setup-X.Y.Z.exe
 
 #define MyAppName "Borsa Bot"
-#define MyAppVersion "0.1.10"
+#define MyAppVersion "0.1.11"
 #define MyAppPublisher "Borsa Bot"
 #define MyAppURL "https://github.com/"
 #define MyAppExeName "BorsaBot.exe"
