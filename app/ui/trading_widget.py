@@ -820,25 +820,26 @@ class TradingWidget(QWidget):
 
     @Slot()
     def _on_reject(self, rec: PendingRecRow) -> None:
+        # OPTIMISTIC: önce UI'dan kaldır (kullanıcı anında geri bildirim alır),
+        # sonra DB'ye persist et. DB update başarısızsa toast hatası göster
+        # AMA UI'yi geri restore etme — eski deneyim çok yavaştı.
+        self._pending = [r for r in self._pending if r.rec_id != rec.rec_id]
+        self._refresh_pending_list()
+
         if not self._bridge or not self._bridge.available:
             ToastManager.instance().show(
                 f"{rec.ticker} reddedildi (sadece UI).", level="info"
             )
-            self._pending = [r for r in self._pending if r.rec_id != rec.rec_id]
-            self._refresh_pending_list()
             return
         bridge = self._bridge
         bridge.run_async(
             lambda: bridge.manual.mark_skipped(int(rec.rec_id), "UI reject"),
-            on_success=lambda _r: (
-                ToastManager.instance().show(
-                    f"{rec.ticker} reddedildi.", level="info"
-                ),
-                self._refresh_pending_list(),
+            on_success=lambda _r: ToastManager.instance().show(
+                f"{rec.ticker} reddedildi.", level="info"
             ),
             on_error=lambda exc: (
                 ToastManager.instance().show(
-                    f"Reddetme hatası: {exc}", level="error"
+                    f"Reddetme DB'ye yazılamadı: {exc}", level="error"
                 ),
                 logger.warning("mark_skipped hata: {}", exc),
             ),

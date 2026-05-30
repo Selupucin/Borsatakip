@@ -44,10 +44,26 @@ HIDDEN_IMPORTS = [
     # asyncio
     "asyncio",
     "aiosqlite",
-    # Lazy import edilen modüller
+    # Veri kaynakları — lazy-import edilen 3rd party modüller
+    "feedparser",          # RSS haber kaynağı (BUNSUZ haber çekmez)
+    "yfinance",            # yfinance source
+    "pandas_datareader",   # stooq source
+    "isyatirimhisse",      # BIST kaynak
+    "bs4",                 # beautifulsoup4 (kap_source, investing_source)
+    "lxml",                # BS4 parser
+    "html.parser",         # BS4 fallback parser
+    # Lazy import edilen iç modüller
     "app.db.session",
     "app.db.models",
     "app.services.scheduler",
+    "app.data.sources.rss_source",
+    "app.data.sources.yfinance_source",
+    "app.data.sources.stooq_source",
+    "app.data.sources.isyatirim_source",
+    "app.data.sources.kap_source",
+    "app.data.sources.investing_source",
+    "app.data.sources.alphavantage_source",
+    "app.data.sources.tradingview_source",
     "scripts.seed_instruments",
 ]
 

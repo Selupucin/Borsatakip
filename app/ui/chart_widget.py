@@ -545,19 +545,79 @@ class ChartWidget(QWidget):
         self._fallback_link = info
 
     def _on_load_finished(self, ok: bool) -> None:
-        """QWebEngineView load tamamlandı — başarısızsa kullanıcıya bildir."""
-        if ok or not self._current_ticker:
+        """QWebEngineView load tamamlandı —
+          - başarısızsa kullanıcıya toast bildir
+          - başarılıysa TradingView'in 'Sembol sadece TradingView'de' modalını
+            CSS injection ile gizle (BIST hisseleri için bu popup sık çıkıyor;
+            kullanıcı her sembol değişiminde 'Tamam' tıklamak zorunda kalıyordu)
+        """
+        if not ok and self._current_ticker:
+            symbol = _tv_symbol(self._current_ticker, self._current_exchange)
+            logger.warning(
+                "TradingView grafik yüklenemedi: symbol={} — fallback'e geçiliyor.",
+                symbol,
+            )
+            ToastManager.instance().show(
+                f"Grafik yüklenmedi ({symbol}). "
+                f"Üst toolbar'daki '📊 Yahoo Finance' butonu ile alternatif aç.",
+                level="warning",
+            )
             return
-        symbol = _tv_symbol(self._current_ticker, self._current_exchange)
-        logger.warning(
-            "TradingView grafik yüklenemedi: symbol={} — fallback'e geçiliyor.",
-            symbol,
-        )
-        ToastManager.instance().show(
-            f"Grafik yüklenmedi ({symbol}). "
-            f"Üst toolbar'daki '🔗 TradingView' butonu ile tarayıcıda aç.",
-            level="warning",
-        )
+
+        # Yüklendi — TV widget popup'larını gizlemek için CSS+JS inject et.
+        if self._web_view is None:
+            return
+        try:
+            # MutationObserver ile DOM değişikliklerini izle ve modal'ları
+            # gizle. iframe içeriği same-origin policy nedeniyle erişilemez;
+            # bu yüzden CSS-only attack: parent document'a güçlü stil enjekte
+            # et — TradingView widget iframe'i içine yansımaz ama ana çerçeve
+            # üstü modal'lar gizlenir.
+            self._web_view.page().runJavaScript("""
+                (function() {
+                    var style = document.createElement('style');
+                    style.textContent = `
+                        /* TradingView dialog/modal popup'larını gizle */
+                        [role="dialog"],
+                        .tv-dialog,
+                        .tv-dialog__modal-wrap,
+                        .js-dialog,
+                        div[class*="dialog"],
+                        div[class*="DialogContent"] {
+                            display: none !important;
+                            visibility: hidden !important;
+                        }
+                        /* Backdrop overlay */
+                        .tv-dialog__modal-background,
+                        div[class*="backdrop"] {
+                            display: none !important;
+                        }
+                    `;
+                    document.head.appendChild(style);
+
+                    // MutationObserver: yeni eklenen dialog'ları anında gizle
+                    var observer = new MutationObserver(function(mutations) {
+                        document.querySelectorAll(
+                            '[role="dialog"], .tv-dialog, .js-dialog'
+                        ).forEach(function(el) {
+                            el.style.display = 'none';
+                            el.style.visibility = 'hidden';
+                            // Backdrop'u kapatmaya çalış (X tıklatmaya gerek
+                            // kalmadan da bazen DOM'da kalır)
+                            var closeBtn = el.querySelector(
+                                '[class*="close"], button[aria-label*="lose"]'
+                            );
+                            if (closeBtn) closeBtn.click();
+                        });
+                    });
+                    observer.observe(document.body, {
+                        childList: true,
+                        subtree: true
+                    });
+                })();
+            """)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("TV popup gizleme JS hatası: {}", exc)
 
     # Geriye uyumluluk — eski API metodları (no-op).
     def add_indicator(self, name: str, series) -> None:  # noqa: ANN001

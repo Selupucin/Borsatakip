@@ -65,6 +65,24 @@ def _apply_lightweight_migrations() -> None:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Migration başarısız ({}.{}): {}", table, column, exc)
 
+        # Data fix: 0.1.7 öncesi manuel-eşli alımlarda wallet.cash_balance
+        # düşülüyordu (skip_cash_check'in yan etkisi). Sonuç: tahsis edilmemiş
+        # cüzdanlar negatif cash gösteriyordu. 0.1.7+ artık dokunmuyor; eski
+        # negatif değerleri "tahsis edilen tutar"a sıfırlıyoruz.
+        try:
+            if "wallets" in inspector.get_table_names():
+                result = conn.execute(text(
+                    "UPDATE wallets SET cash_balance = COALESCE(allocated, 0) "
+                    "WHERE cash_balance < 0"
+                ))
+                if result.rowcount > 0:
+                    logger.info(
+                        "Bookkeeping fix: {} cüzdandaki negatif cash_balance "
+                        "tahsis edilen tutara sıfırlandı.", result.rowcount
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Negative cash_balance fix başarısız: {}", exc)
+
 
 def _ensure_first_run_bootstrap() -> None:
     """İlk açılış: DB yoksa şema kur + temel verileri seed et.
